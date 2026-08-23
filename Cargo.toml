@@ -1,0 +1,19 @@
+[package]
+name = "png2jxl-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+
+[lib]
+name = "_preflate"
+crate-type = ["cdylib"]
+
+[dependencies]
+preflate-rs = "=0.7.6"
+pyo3 = { version = "0.29.0", features = ["extension-module"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+
