@@ -1,11 +1,14 @@
 """Public byte APIs for exact PNG reconstruction through JPEG XL."""
 
 from hashlib import sha256
+from io import BytesIO
 from struct import pack
 from sys import maxsize
+from warnings import catch_warnings, simplefilter
 from zlib import adler32, crc32, decompressobj
 
 import pillow_jxl
+from PIL import Image
 
 from . import _preflate
 from .exceptions import (
@@ -22,6 +25,7 @@ from .jumbf import build_jumbf, find_project_payload
 from .jxl_container import jumb_payloads, parse_jxl_container
 from .limits import DEFAULT_LIMITS, ResourceLimits
 from .png import (
+    PNG_SIGNATURE,
     AmbiguousPaletteError,
     PaletteError,
     ParsedPng,
@@ -31,7 +35,7 @@ from .png import (
     palette_to_carrier,
     parse_png,
 )
-from .png_filter import FilterError, refilter, unfilter
+from .png_filter import FilterError, extract_filter_types, refilter
 from .reconstruction import (
     PREFLATE_VERSION,
     ReconstructionData,
@@ -164,6 +168,43 @@ def _encode_jxl(
         raise JxlCodecError(f"pillow_jxl encode failed: {error}") from error
 
 
+def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
+    checksum = crc32(chunk_type + payload) & 0xFFFFFFFF
+    return pack(">I", len(payload)) + chunk_type + payload + pack(">I", checksum)
+
+
+def _decode_png_samples(parsed: ParsedPng) -> bytes:
+    expected_length = parsed.width * parsed.height * parsed.bytes_per_pixel
+    pieces = [PNG_SIGNATURE, _png_chunk(b"IHDR", parsed.ihdr)]
+    if parsed.color_type == 3:
+        assert parsed.palette is not None
+        pieces.append(_png_chunk(b"PLTE", parsed.palette))
+    zlib_stream = parsed.zlib_header + parsed.raw_deflate + parsed.adler32
+    pieces.extend((_png_chunk(b"IDAT", zlib_stream), _png_chunk(b"IEND", b"")))
+    pixel_png = b"".join(pieces)
+    try:
+        with catch_warnings():
+            simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(pixel_png), formats=("PNG",)) as image:
+                image.load()
+                if (
+                    image.format != "PNG"
+                    or image.mode != parsed.mode
+                    or image.size != (parsed.width, parsed.height)
+                ):
+                    raise CorruptPngError("Pillow decoded PNG metadata inconsistently")
+                samples = image.tobytes()
+    except Image.DecompressionBombError as error:
+        raise ResourceLimitError("PNG exceeds Pillow's pixel safety limit") from error
+    except CorruptPngError:
+        raise
+    except Exception as error:
+        raise CorruptPngError("Pillow could not decode the PNG pixels") from error
+    if len(samples) != expected_length:
+        raise CorruptPngError("Pillow decoded PNG sample length is inconsistent")
+    return samples
+
+
 def png_to_jxl(
     png: bytes,
     *,
@@ -186,14 +227,16 @@ def png_to_jxl(
     parsed = parse_png(png, limits)
     plaintext, corrections = _encode_preflate(parsed, limits)
     try:
-        source_samples, row_filters = unfilter(
+        row_filters = extract_filter_types(
             plaintext,
             parsed.width,
             parsed.height,
             parsed.bytes_per_pixel,
+            parsed.interlace_method,
         )
     except FilterError as error:
         raise CorruptPngError(str(error)) from error
+    source_samples = _decode_png_samples(parsed)
 
     carrier_mode = parsed.mode
     carrier_samples = source_samples
@@ -273,8 +316,7 @@ def _idat_run(zlib_stream: bytes, lengths: tuple[int, ...]) -> bytes:
         payload = zlib_stream[offset : offset + length]
         if len(payload) != length:
             raise CorruptReconstructionError("IDAT lengths exceed the zlib stream")
-        checksum = crc32(b"IDAT" + payload) & 0xFFFFFFFF
-        chunks.append(pack(">I", length) + b"IDAT" + payload + pack(">I", checksum))
+        chunks.append(_png_chunk(b"IDAT", payload))
         offset += length
     if offset != len(zlib_stream):
         raise CorruptReconstructionError("IDAT lengths do not consume the zlib stream")
@@ -344,6 +386,7 @@ def jxl_to_png(
             height,
             bytes_per_pixel,
             reconstruction.row_filters,
+            reconstruction.interlace_method,
         )
     except FilterError as error:
         raise CorruptReconstructionError(str(error)) from error

@@ -11,11 +11,70 @@ MODE_INFO = {
     "LA": (4, 2),
     "RGBA": (6, 4),
 }
+ADAM7_PASSES = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
 
 
 def chunk(chunk_type: bytes, payload: bytes) -> bytes:
     checksum = crc32(chunk_type + payload) & 0xFFFFFFFF
     return pack(">I", len(payload)) + chunk_type + payload + pack(">I", checksum)
+
+
+def adam7_filter_count(width: int, height: int) -> int:
+    return sum(
+        len(range(y_start, height, y_step))
+        for x_start, y_start, x_step, y_step in ADAM7_PASSES
+        if range(x_start, width, x_step) and range(y_start, height, y_step)
+    )
+
+
+def _adam7_refilter(
+    samples: bytes,
+    width: int,
+    height: int,
+    bytes_per_pixel: int,
+    filters: bytes,
+) -> bytes:
+    filtered_parts: list[bytes] = []
+    filter_offset = 0
+    for x_start, y_start, x_step, y_step in ADAM7_PASSES:
+        xs = range(x_start, width, x_step)
+        ys = range(y_start, height, y_step)
+        pass_width = len(xs)
+        pass_height = len(ys)
+        if not pass_width or not pass_height:
+            continue
+
+        pass_samples = bytearray(pass_width * pass_height * bytes_per_pixel)
+        pass_offset = 0
+        for y in ys:
+            for x in xs:
+                source_offset = (y * width + x) * bytes_per_pixel
+                pass_samples[pass_offset : pass_offset + bytes_per_pixel] = samples[
+                    source_offset : source_offset + bytes_per_pixel
+                ]
+                pass_offset += bytes_per_pixel
+        pass_filters = filters[filter_offset : filter_offset + pass_height]
+        filtered_parts.append(
+            refilter(
+                bytes(pass_samples),
+                pass_width,
+                pass_height,
+                bytes_per_pixel,
+                pass_filters,
+            )
+        )
+        filter_offset += pass_height
+    if filter_offset != len(filters):
+        raise ValueError("Adam7 filter count is inconsistent")
+    return b"".join(filtered_parts)
 
 
 def make_png(
@@ -41,9 +100,19 @@ def make_png(
             for index in range(width * height * bytes_per_pixel)
         )
     if filters is None:
-        filters = bytes(row % 5 for row in range(height))
+        filter_count = adam7_filter_count(width, height) if interlace == 1 else height
+        filters = bytes(row % 5 for row in range(filter_count))
 
-    filtered = refilter(samples, width, height, bytes_per_pixel, filters)
+    if interlace == 1:
+        filtered = _adam7_refilter(
+            samples,
+            width,
+            height,
+            bytes_per_pixel,
+            filters,
+        )
+    else:
+        filtered = refilter(samples, width, height, bytes_per_pixel, filters)
     zlib_stream = compress(filtered, level=6)
     if idat_splits is None:
         idat_payloads = [zlib_stream]
@@ -86,6 +155,7 @@ def make_palette_png(
     before_plte: Iterable[tuple[bytes, bytes]] = (),
     after_palette: Iterable[tuple[bytes, bytes]] = (),
     after_idat: Iterable[tuple[bytes, bytes]] = (),
+    interlace: int = 0,
 ) -> bytes:
     if indices is None:
         entry_count = len(palette) // 3
@@ -104,6 +174,7 @@ def make_palette_png(
         before_idat=palette_chunks,
         after_idat=after_idat,
         color_type=3,
+        interlace=interlace,
     )
 
 

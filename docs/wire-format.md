@@ -48,7 +48,8 @@ Sections appear without alignment or padding in this exact order:
 1. exact PNG prefix through the byte before the first IDAT length field;
 2. exact suffix immediately after the last IDAT CRC through IEND/EOF;
 3. `idat_count` unsigned 32-bit original payload lengths;
-4. one original filter byte per row;
+4. one original filter byte per serialized scanline, in row order for
+   non-interlaced PNG or pass-major row order for Adam7;
 5. opaque preflate correction bytes.
 6. when flag bit 0 is set, a fixed 32-byte used-index bitmap.
 
@@ -56,6 +57,11 @@ The palette flag is required exactly when the stored IHDR has color type 3.
 Bitmap bit `index % 8` of byte `index // 8` corresponds to that palette index,
 with the least-significant bit first. The body SHA-256 covers the bitmap, while
 the header's correction length continues to describe only section 5.
+
+For non-interlaced PNG, the row-filter count equals the image height. For
+Adam7, it is the sum of the non-empty pass heights. The filtered length is the
+sum of one filter byte plus the pass row byte width for every serialized
+scanline. Predictors reset at the start of each pass.
 
 For palette archives, exact `PLTE` and optional `tRNS` chunks remain in the PNG
 prefix. Missing `tRNS` entries have alpha 255. The used entries determine the

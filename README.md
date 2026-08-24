@@ -61,14 +61,14 @@ delegate to `pillow_jxl`.
 
 ## Support and limits
 
-Supported PNG images are static, non-interlaced, 8-bit L, LA, RGB, RGBA, or
-indexed-color files using PNG filters 0–4 and consecutive IDAT chunks. Indexed
-files require a valid `PLTE`, may use `tRNS`. If
+Supported PNG images are static, 8-bit L,
+LA, RGB, RGBA, or indexed-color files using PNG filters 0–4 and consecutive
+IDAT chunks. Indexed files require a valid `PLTE`, may use `tRNS`. If
 two used indices resolve to the same effective RGBA color, the file is rejected
 because pixels alone cannot recover which index was present. Dead duplicate
 palette entries are allowed.
 
-Indexed samples at 1/2/4 bits, all 16-bit samples, Adam7, and APNG are rejected
+Indexed samples at 1/2/4 bits, all 16-bit samples, and APNG are rejected
 explicitly.
 
 Public functions accept an immutable `ResourceLimits` value. Defaults allow up

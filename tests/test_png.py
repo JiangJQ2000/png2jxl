@@ -39,12 +39,30 @@ def test_crc_corruption_is_rejected() -> None:
     [
         ({"mode": "L", "color_type": 3, "bit_depth": 4}, "8-bit"),
         ({"bit_depth": 16}, "8-bit"),
-        ({"interlace": 1}, "Adam7"),
     ],
 )
 def test_unsupported_profiles_are_explicit(kwargs: dict, message: str) -> None:
     with pytest.raises(UnsupportedPngError, match=message):
         parse_png(make_png(**kwargs))
+
+
+def test_invalid_interlace_method_is_corrupt() -> None:
+    with pytest.raises(CorruptPngError, match="interlace"):
+        parse_png(make_png(interlace=2))
+
+
+def test_parse_adam7_profile_uses_pass_scanline_size() -> None:
+    parsed = parse_png(
+        make_png(
+            mode="RGB",
+            width=9,
+            height=7,
+            interlace=1,
+            idat_splits=[0, 1, 0, 2],
+        )
+    )
+    assert parsed.interlace_method == 1
+    assert parsed.expected_filtered_size == 9 * 7 * 3 + 14
 
 
 def test_apng_marker_is_rejected() -> None:

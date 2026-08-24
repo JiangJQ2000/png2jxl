@@ -1,6 +1,7 @@
 from dataclasses import replace
 from io import BytesIO
 from random import Random
+from zlib import compress, decompress
 
 import pillow_jxl
 import pytest
@@ -25,16 +26,52 @@ from png2jxl.reconstruction import parse_reconstruction, serialize_reconstructio
 from .helpers import chunk, make_palette_png, make_png
 
 
+def _replace_idat_plaintext(source: bytes, plaintext: bytes) -> bytes:
+    offset = 8
+    first_idat = -1
+    final_idat_end = -1
+    while offset < len(source):
+        length = int.from_bytes(source[offset : offset + 4], "big")
+        chunk_type = source[offset + 4 : offset + 8]
+        chunk_end = offset + length + 12
+        if chunk_type == b"IDAT":
+            if first_idat < 0:
+                first_idat = offset
+            final_idat_end = chunk_end
+        offset = chunk_end
+    assert first_idat >= 0 and final_idat_end >= 0
+    return (
+        source[:first_idat]
+        + chunk(b"IDAT", compress(plaintext))
+        + source[final_idat_end:]
+    )
+
+
+def _idat_plaintext(source: bytes) -> bytes:
+    offset = 8
+    payloads: list[bytes] = []
+    while offset < len(source):
+        length = int.from_bytes(source[offset : offset + 4], "big")
+        chunk_type = source[offset + 4 : offset + 8]
+        if chunk_type == b"IDAT":
+            payloads.append(source[offset + 8 : offset + 8 + length])
+        offset += length + 12
+    return decompress(b"".join(payloads))
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-def test_exact_roundtrip_for_supported_modes(mode: str) -> None:
+@pytest.mark.parametrize("interlace", [0, 1])
+def test_exact_roundtrip_for_supported_modes(mode: str, interlace: int) -> None:
+    width, height = (9, 7) if interlace else (4, 5)
     source = make_png(
         mode=mode,
-        width=4,
-        height=5,
-        filters=bytes(range(5)),
+        width=width,
+        height=height,
+        filters=None if interlace else bytes(range(5)),
         idat_splits=[0, 1, 0, 2, 3],
         before_idat=[(b"tEXt", b"before\x00metadata")],
         after_idat=[(b"tEXt", b"after\x00metadata")],
+        interlace=interlace,
     )
     archive = png_to_jxl(source, effort=1)
     assert archive is not None
@@ -61,20 +98,24 @@ def test_exact_roundtrip_for_supported_modes(mode: str) -> None:
         ),
     ],
 )
+@pytest.mark.parametrize("interlace", [0, 1])
 def test_exact_roundtrip_for_palette_carriers(
     mode: str,
     palette: bytes,
     transparency: bytes | None,
+    interlace: int,
 ) -> None:
-    indices = bytes(index % 3 for index in range(20))
+    width, height = (9, 7) if interlace else (4, 5)
+    indices = bytes(index % 3 for index in range(width * height))
     source = make_palette_png(
         palette=palette,
         transparency=transparency,
-        width=4,
-        height=5,
+        width=width,
+        height=height,
         indices=indices,
-        filters=bytes(range(5)),
+        filters=None if interlace else bytes(range(5)),
         idat_splits=[0, 1, 0, 2, 3],
+        interlace=interlace,
     )
     archive = png_to_jxl(source, effort=1)
     assert archive is not None
@@ -86,8 +127,27 @@ def test_exact_roundtrip_for_palette_carriers(
     assert info.mode == mode
     with Image.open(BytesIO(source)) as source_image:
         expected_rgba = source_image.convert("RGBA").tobytes()
-    carrier_image = Image.frombytes(mode, (4, 5), bytes(pixels))
+    carrier_image = Image.frombytes(mode, (width, height), bytes(pixels))
     assert carrier_image.convert("RGBA").tobytes() == expected_rgba
+
+
+@pytest.mark.parametrize("change", ["truncate", "append"])
+def test_adam7_filtered_length_must_match_ihdr(change: str) -> None:
+    source = make_png(mode="RGBA", width=9, height=7, interlace=1)
+    plaintext = _idat_plaintext(source)
+    changed = plaintext[:-1] if change == "truncate" else plaintext + b"\x00"
+    corrupted = _replace_idat_plaintext(source, changed)
+    with pytest.raises(CorruptPngError, match="plaintext length"):
+        png_to_jxl(corrupted, effort=1)
+
+
+def test_adam7_invalid_pass_filter_is_corrupt() -> None:
+    source = make_png(mode="RGBA", width=9, height=7, interlace=1)
+    plaintext = bytearray(_idat_plaintext(source))
+    plaintext[0] = 5
+    corrupted = _replace_idat_plaintext(source, bytes(plaintext))
+    with pytest.raises(CorruptPngError, match="filter type 5"):
+        png_to_jxl(corrupted, effort=1)
 
 
 def test_dead_duplicate_palette_entry_roundtrips() -> None:

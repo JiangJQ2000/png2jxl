@@ -26,8 +26,6 @@ UNSUPPORTED_PATHS = {
     "hopper_bw_500.png",
     "i_trns.png",
     "morph_a.png",
-    "pil123p.png",
-    "pil123rgba.png",
     "sunraster.im1.png",
     "tRNS_null_1x1.png",
     "tiny.png",
@@ -70,8 +68,8 @@ def test_pillow_corpus_shape() -> None:
 
     assert len(paths) == EXPECTED_PNG_COUNT
     assert len(apng_paths) == EXPECTED_APNG_COUNT
-    assert len(unsupported_paths) == 74
-    assert len(exact_paths) == 339
+    assert len(unsupported_paths) == 72
+    assert len(exact_paths) == 341
     assert UNSUPPORTED_PATHS <= paths
     assert CORRUPT_PATHS <= paths
     assert not (UNSUPPORTED_PATHS & CORRUPT_PATHS)

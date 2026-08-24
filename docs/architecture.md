@@ -5,7 +5,7 @@
 `png2jxl` is Python-first. Modules have one responsibility:
 
 - `png.py` strictly parses the supported PNG container profile.
-- `png_filter.py` implements PNG filters 0–4.
+- `png_filter.py` implements PNG filters 0–4 and Adam7 scanline layout.
 - `reconstruction.py` owns the persistent `pngr` payload.
 - `jumbf.py` owns the minimal project JUMBF envelope.
 - `jxl_container.py` strictly reads top-level JXL box boundaries.
@@ -17,9 +17,9 @@ The only project native code is `src/lib.rs`. It releases the GIL around the
 public `preflate-rs` whole-stream raw-DEFLATE APIs and converts structured Rust
 errors to Python exceptions. It contains no PNG or JXL implementation.
 
-If Numba is importable, `png_filter.py` eagerly JIT-compiles its two scanline
-loops from explicit signatures. Otherwise the same cores execute as plain
-Python without changing the API.
+If Numba is importable, `png_filter.py` eagerly JIT-compiles its non-interlaced
+and Adam7 refilter loops from explicit signatures. Otherwise the same cores
+execute as plain Python without changing the API.
 
 ## Encode pipeline
 
@@ -28,7 +28,10 @@ Python without changing the API.
 2. Preserve exact prefix/suffix bytes, IDAT payload lengths, zlib header, and
    Adler-32. Analyze only the raw-DEFLATE body with verified preflate.
 3. Cross-check preflate plaintext against a bounded standard zlib decode,
-   expected length, and Adler-32; unfilter it into raw samples.
+   expected length, and Adler-32; extract exact scanline filters in normal or
+   Adam7 pass order. Build a minimal pixel-only PNG from the validated
+   IHDR/PLTE/IDAT data and load it through Pillow to obtain the unfiltered,
+   deinterlaced sample raster without reparsing unrelated ancillary metadata.
 4. For indexed color, record a 256-bit used-index bitmap and expand indices to
    the smallest lossless L/LA/RGB/RGBA carrier. Reject two used indices with the
    same effective RGBA color because carrier pixels cannot disambiguate them.
@@ -49,8 +52,8 @@ Python without changing the API.
 4. For indexed color, derive the carrier mode from exact `PLTE`/`tRNS` bytes and
    the used-index bitmap, invert carrier samples to indices, and require that
    the observed index set exactly matches the bitmap.
-5. Refilter source samples with exact stored row filters, verify Adler-32,
-   recreate raw-DEFLATE,
+5. Reorder source samples into normal or Adam7 pass scanlines, refilter with
+   exact stored filters, verify Adler-32, recreate raw-DEFLATE,
    and verify the rebuilt zlib stream yields the same filtered plaintext.
 6. Split the zlib bytes at the stored IDAT boundaries, regenerate IDAT CRCs,
    append exact prefix/suffix, validate the final PNG, and require stored length

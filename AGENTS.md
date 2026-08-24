@@ -54,13 +54,13 @@ Before changing implementation or persistent data, read the relevant document:
 
 ## MVP PNG profile
 
-Support only static, non-interlaced, compression/filter method 0, 8-bit L, LA,
-RGB, RGBA, and indexed-color PNG with filters 0–4, strict CRCs, and consecutive
-IDAT chunks. Indexed color requires valid `PLTE`/optional `tRNS`, a 32-byte
-used-index bitmap, adaptive L/LA/RGB/RGBA expansion, and no duplicate effective
-RGBA color through multiple used indices. Reject 1/2/4/16-bit samples, Adam7,
-APNG, invalid chunks, and incompatible zlib features. Do not expand claims
-before exact-roundtrip tests.
+Support only static, compression/filter
+method 0, 8-bit L, LA, RGB, RGBA, and indexed-color PNG with filters 0–4,
+strict CRCs, and consecutive IDAT chunks. Indexed color requires valid
+`PLTE`/optional `tRNS`, a 32-byte used-index bitmap, adaptive L/LA/RGB/RGBA
+expansion, and no duplicate effective RGBA color through multiple used indices.
+Reject 1/2/4/16-bit samples, APNG, invalid chunks, and incompatible zlib
+features. Do not expand claims before exact-roundtrip tests.
 
 ## Dependencies
 

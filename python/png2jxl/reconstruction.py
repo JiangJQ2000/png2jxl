@@ -18,6 +18,7 @@ from .png import (
     palette_carrier_mode,
     palette_from_prefix,
 )
+from .png_filter import scanline_info
 
 MAGIC = b"\x89PNGR\r\n\x1a"
 WIRE_MAJOR = 1
@@ -56,6 +57,10 @@ class ReconstructionData:
         return IHDR_STRUCT.unpack(self.ihdr)[3]
 
     @property
+    def interlace_method(self) -> int:
+        return IHDR_STRUCT.unpack(self.ihdr)[-1]
+
+    @property
     def mode(self) -> str:
         if self.color_type == 3:
             palette, transparency = palette_from_prefix(self.prefix, self.ihdr)
@@ -76,11 +81,43 @@ def source_digest(source: bytes) -> bytes:
     return sha256(source).digest()
 
 
+def _validate_ihdr(
+    ihdr: bytes,
+    limits: ResourceLimits,
+) -> tuple[int, int, int]:
+    if len(ihdr) != IHDR_STRUCT.size:
+        raise CorruptReconstructionError("stored IHDR must contain 13 bytes")
+    width, height, bit_depth, color_type, compression, filter_method, interlace = (
+        IHDR_STRUCT.unpack(ihdr)
+    )
+    if width == 0 or height == 0:
+        raise CorruptReconstructionError("stored dimensions must be non-zero")
+    if width > limits.max_width or height > limits.max_height:
+        raise ResourceLimitError("stored dimensions exceed configured limits")
+    if width * height > limits.max_pixels:
+        raise ResourceLimitError("stored pixel count exceeds its configured limit")
+    if (
+        bit_depth != 8
+        or color_type not in COLOR_INFO
+        or compression != 0
+        or filter_method != 0
+        or interlace not in {0, 1}
+    ):
+        raise IncompatibleReconstructionError("stored PNG profile is not supported")
+
+    filtered_length, filter_count = scanline_info(
+        width,
+        height,
+        COLOR_INFO[color_type][1],
+        interlace,
+    )
+    limits.ensure(filtered_length, limits.max_filtered_size, "filtered plaintext")
+    return color_type, filtered_length, filter_count
+
+
 def _validate_common(data: ReconstructionData, limits: ResourceLimits) -> None:
     if len(data.source_sha256) != 32:
         raise CorruptReconstructionError("source SHA-256 must contain 32 bytes")
-    if len(data.ihdr) != IHDR_STRUCT.size:
-        raise CorruptReconstructionError("stored IHDR must contain 13 bytes")
     if len(data.zlib_header) != 2 or len(data.adler32) != 4:
         raise CorruptReconstructionError("invalid stored zlib wrapper")
     cmf, zlib_flags = data.zlib_header
@@ -101,33 +138,14 @@ def _validate_common(data: ReconstructionData, limits: ResourceLimits) -> None:
     if any(filter_type > 4 for filter_type in data.row_filters):
         raise CorruptReconstructionError("stored PNG filter type is invalid")
 
-    width, height, bit_depth, color_type, compression, filter_method, interlace = (
-        IHDR_STRUCT.unpack(data.ihdr)
+    color_type, expected_filtered, expected_filter_count = _validate_ihdr(
+        data.ihdr,
+        limits,
     )
-    if width == 0 or height == 0:
-        raise CorruptReconstructionError("stored dimensions must be non-zero")
-    if width > limits.max_width or height > limits.max_height:
-        raise ResourceLimitError("stored dimensions exceed configured limits")
-    if width * height > limits.max_pixels:
-        raise ResourceLimitError("stored pixel count exceeds its configured limit")
-    if (
-        bit_depth != 8
-        or color_type not in COLOR_INFO
-        or compression != 0
-        or filter_method != 0
-        or interlace != 0
-    ):
-        raise IncompatibleReconstructionError("stored PNG profile is not supported")
-    if len(data.row_filters) != height:
-        raise CorruptReconstructionError(
-            "stored row-filter count does not match height"
-        )
-
-    bytes_per_pixel = COLOR_INFO[color_type][1]
-    expected_filtered = (width * bytes_per_pixel + 1) * height
+    if len(data.row_filters) != expected_filter_count:
+        raise CorruptReconstructionError("stored row-filter count is inconsistent")
     if data.filtered_length != expected_filtered:
         raise CorruptReconstructionError("stored filtered length is inconsistent")
-    limits.ensure(data.filtered_length, limits.max_filtered_size, "filtered plaintext")
     limits.ensure(data.source_length, limits.max_reconstructed_size, "source PNG")
     limits.ensure(len(data.prefix), limits.max_prefix_size, "PNG prefix")
     limits.ensure(len(data.suffix), limits.max_suffix_size, "PNG suffix")
@@ -270,9 +288,11 @@ def parse_reconstruction(
         raise ResourceLimitError("stored IDAT count exceeds its configured limit")
 
     limits.ensure(source_length, limits.max_reconstructed_size, "source PNG")
-    limits.ensure(filtered_length, limits.max_filtered_size, "filtered plaintext")
-    if row_filter_count > limits.max_height:
-        raise ResourceLimitError("stored row-filter count exceeds its configured limit")
+    color_type, expected_filtered, expected_filter_count = _validate_ihdr(ihdr, limits)
+    if filtered_length != expected_filtered:
+        raise CorruptReconstructionError("stored filtered length is inconsistent")
+    if row_filter_count != expected_filter_count:
+        raise CorruptReconstructionError("stored row-filter count is inconsistent")
     limits.ensure(prefix_length, limits.max_prefix_size, "PNG prefix")
     limits.ensure(suffix_length, limits.max_suffix_size, "PNG suffix")
     limits.ensure(
@@ -280,7 +300,6 @@ def parse_reconstruction(
         limits.max_correction_size,
         "preflate corrections",
     )
-    color_type = IHDR_STRUCT.unpack(ihdr)[3]
     has_palette_bitmap = bool(flags & FLAG_PALETTE_USED_BITMAP)
     if has_palette_bitmap != (color_type == 3):
         raise IncompatibleReconstructionError(

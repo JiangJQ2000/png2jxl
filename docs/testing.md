@@ -2,8 +2,9 @@
 
 ## Supported exact profile
 
-The test matrix covers static, non-interlaced, 8-bit L, LA, RGB, RGBA, and
-indexed-color PNG; filters 0–4 including mixed rows;
+The test matrix covers static, 8-bit L,
+LA, RGB, RGBA, and indexed-color PNG; filters 0–4 including mixed rows and
+passes;
 single/multiple/zero-length IDAT chunks; unusual split boundaries; legal
 RGB/RGBA PLTE; ancillary chunks before and after IDAT; and compressible/noisy
 samples.
@@ -22,8 +23,8 @@ Every correctness fix requires a regression test.
 - Native raw-DEFLATE: plaintext/correction roundtrip, trailing input,
   correction corruption, and plaintext limits.
 - PNG: signature, IHDR profile, chunk ordering/bounds/CRCs, APNG markers, zlib
-  wrapper, expected plaintext, filters, optional Numba JIT and pure-Python
-  fallback, and resource limits.
+  wrapper, expected plaintext, Adam7 pass geometry, filters, optional Numba JIT
+  and pure-Python fallback, and resource limits.
 - Wire/JUMBF/JXL: deterministic serialization, body digest, version/flags,
   palette bitmap bounds and set consistency, malicious lengths,
   unrelated/duplicate/malformed JUMBF, 32/64/size-0 boxes, and truncation.
@@ -37,8 +38,8 @@ Every correctness fix requires a regression test.
 - Pillow corpus: all 420 PNG files from Pillow 12.3.0 commit
   `bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d`; supported files must roundtrip
   byte-for-byte, while known unsupported or corrupt files must raise their
-  corresponding typed exception. The pinned corpus currently contains 339
-  exact-roundtrip cases, 74 unsupported profiles, and 7 corrupt inputs.
+  corresponding typed exception. The pinned corpus currently contains 341
+  exact-roundtrip cases, 72 unsupported profiles, and 7 corrupt inputs.
 
 ## Compatibility policy
 

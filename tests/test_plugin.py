@@ -24,7 +24,7 @@ def palette_source() -> bytes:
 
 
 def test_explicit_source_png_save() -> None:
-    source = make_png(mode="RGBA")
+    source = make_png(mode="RGBA", width=9, height=7, interlace=1)
     with Image.open(BytesIO(source)) as image:
         output = BytesIO()
         image.save(

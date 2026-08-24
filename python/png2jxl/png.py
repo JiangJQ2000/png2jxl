@@ -11,6 +11,7 @@ from .exceptions import (
     UnsupportedPngError,
 )
 from .limits import DEFAULT_LIMITS, ResourceLimits
+from .png_filter import scanline_info
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 IHDR_STRUCT = Struct(">IIBBBBB")
@@ -95,8 +96,6 @@ def _parse_ihdr(payload: bytes, limits: ResourceLimits) -> tuple[int, ...]:
         raise UnsupportedPngError("unsupported PNG filter method")
     if interlace not in {0, 1}:
         raise CorruptPngError("invalid PNG interlace method")
-    if interlace != 0:
-        raise UnsupportedPngError("Adam7 interlacing is not supported")
     return values
 
 
@@ -461,7 +460,12 @@ def parse_png(
     if color_type == 3 and palette is None:
         raise CorruptPngError("indexed-color PNG requires PLTE before IDAT")
     mode, bytes_per_pixel = COLOR_INFO[color_type]
-    expected_filtered_size = (width * bytes_per_pixel + 1) * height
+    expected_filtered_size, _filter_count = scanline_info(
+        width,
+        height,
+        bytes_per_pixel,
+        interlace,
+    )
     limits.ensure(
         expected_filtered_size,
         limits.max_filtered_size,

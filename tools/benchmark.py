@@ -6,11 +6,9 @@ from time import perf_counter
 
 import pillow_jxl
 from png2jxl import jxl_to_png, png_to_jxl
-from png2jxl.api import _encode_preflate
+from png2jxl.api import _decode_png_samples
 from png2jxl.jxl_container import jumb_payloads, parse_jxl_container
-from png2jxl.limits import DEFAULT_LIMITS
-from png2jxl.png import parse_png
-from png2jxl.png_filter import unfilter
+from png2jxl.png import palette_to_carrier, parse_png
 
 
 def main() -> None:
@@ -22,15 +20,17 @@ def main() -> None:
 
     source = arguments.png.read_bytes()
     parsed = parse_png(source)
-    plaintext, _corrections = _encode_preflate(parsed, DEFAULT_LIMITS)
-    samples, _filters = unfilter(
-        plaintext,
-        parsed.width,
-        parsed.height,
-        parsed.bytes_per_pixel,
-    )
+    samples = _decode_png_samples(parsed)
+    mode = parsed.mode
+    if parsed.color_type == 3:
+        assert parsed.palette is not None
+        mode, samples, _used = palette_to_carrier(
+            samples,
+            parsed.palette,
+            parsed.transparency,
+        )
     baseline = pillow_jxl.Encoder(
-        parsed.mode,
+        mode,
         lossless=True,
         effort=arguments.effort,
         use_container=True,
