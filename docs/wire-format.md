@@ -29,7 +29,7 @@ The header uses `>8sHHIQQ32s32sHHHH13sQ2s4sQQQII`:
 | --- | --- |
 | magic | `89 50 4e 47 52 0d 0a 1a` |
 | major/minor | `1`, `0` |
-| flags | `0`; unknown bits are incompatible |
+| flags | bit 0 is the palette used-index bitmap flag; unknown bits are incompatible |
 | payload size | complete header and body length |
 | source length | exact original PNG byte length |
 | source SHA-256 | exact original PNG digest |
@@ -50,6 +50,19 @@ Sections appear without alignment or padding in this exact order:
 3. `idat_count` unsigned 32-bit original payload lengths;
 4. one original filter byte per row;
 5. opaque preflate correction bytes.
+6. when flag bit 0 is set, a fixed 32-byte used-index bitmap.
+
+The palette flag is required exactly when the stored IHDR has color type 3.
+Bitmap bit `index % 8` of byte `index // 8` corresponds to that palette index,
+with the least-significant bit first. The body SHA-256 covers the bitmap, while
+the header's correction length continues to describe only section 5.
+
+For palette archives, exact `PLTE` and optional `tRNS` chunks remain in the PNG
+prefix. Missing `tRNS` entries have alpha 255. The used entries determine the
+ordinary JXL carrier: grayscale opaque uses L, grayscale with transparency uses
+LA, colored opaque uses RGB, and colored with transparency uses RGBA. Multiple
+used indices may not resolve to the same effective RGBA color; unused duplicate
+entries are allowed.
 
 The reader checks the body digest and every count/length before slicing. IDAT
 lengths must sum to the recreated zlib stream length, and prefix + IDAT chunks +

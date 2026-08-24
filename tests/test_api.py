@@ -4,12 +4,16 @@ from random import Random
 
 import pillow_jxl
 import pytest
+from PIL import Image
 from png2jxl import (
     DEFAULT_LIMITS,
+    CorruptPngError,
+    CorruptReconstructionError,
     ExactRoundtripError,
     NotReconstructableJxlError,
     Png2JxlError,
     ResourceLimitError,
+    UnsupportedPngError,
     is_png_reconstructable_jxl,
     jxl_to_png,
     png_to_jxl,
@@ -18,7 +22,7 @@ from png2jxl.jumbf import build_jumbf, find_project_payload
 from png2jxl.jxl_container import jumb_payloads, parse_jxl_container
 from png2jxl.reconstruction import parse_reconstruction, serialize_reconstruction
 
-from .helpers import make_png
+from .helpers import chunk, make_palette_png, make_png
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
@@ -42,6 +46,99 @@ def test_exact_roundtrip_for_supported_modes(mode: str) -> None:
     assert info.mode == mode
     assert bytes(pixels)
     assert any(bytes(item.box_type) == b"jumb" for item in boxes)
+
+
+@pytest.mark.parametrize(
+    ("mode", "palette", "transparency"),
+    [
+        ("L", b"\x00\x00\x00\x80\x80\x80\xff\xff\xff", None),
+        ("LA", b"\x00\x00\x00\x80\x80\x80\xff\xff\xff", b"\xff\x80"),
+        ("RGB", b"\xff\x00\x00\x00\xff\x00\x00\x00\xff", None),
+        (
+            "RGBA",
+            b"\xff\x00\x00\x00\xff\x00\x00\x00\xff",
+            b"\xff\x80",
+        ),
+    ],
+)
+def test_exact_roundtrip_for_palette_carriers(
+    mode: str,
+    palette: bytes,
+    transparency: bytes | None,
+) -> None:
+    indices = bytes(index % 3 for index in range(20))
+    source = make_palette_png(
+        palette=palette,
+        transparency=transparency,
+        width=4,
+        height=5,
+        indices=indices,
+        filters=bytes(range(5)),
+        idat_splits=[0, 1, 0, 2, 3],
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    assert is_png_reconstructable_jxl(archive)
+    assert jxl_to_png(archive) == source
+
+    jpeg, info, pixels, _icc, _boxes = pillow_jxl.Decoder()(archive)
+    assert not jpeg
+    assert info.mode == mode
+    with Image.open(BytesIO(source)) as source_image:
+        expected_rgba = source_image.convert("RGBA").tobytes()
+    carrier_image = Image.frombytes(mode, (4, 5), bytes(pixels))
+    assert carrier_image.convert("RGBA").tobytes() == expected_rgba
+
+
+def test_dead_duplicate_palette_entry_roundtrips() -> None:
+    source = make_palette_png(
+        palette=b"\xff\x00\x00\xff\x00\x00\x00\x00\xff",
+        width=2,
+        height=2,
+        indices=b"\x01\x02\x01\x02",
+        filters=b"\x00\x04",
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    assert jxl_to_png(archive) == source
+
+
+def test_full_256_entry_palette_roundtrips() -> None:
+    palette = b"".join(bytes((value, value, value)) for value in range(256))
+    source = make_palette_png(
+        palette=palette,
+        width=2,
+        height=2,
+        indices=b"\x00\xff\xff\x00",
+        filters=b"\x00\x04",
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    assert jxl_to_png(archive) == source
+
+
+def test_used_duplicate_palette_entries_are_unsupported() -> None:
+    source = make_palette_png(
+        palette=b"\xff\x00\x00\xff\x00\x00\x00\x00\xff",
+        width=2,
+        height=2,
+        indices=b"\x00\x01\x02\x01",
+        filters=b"\x00\x04",
+    )
+    with pytest.raises(UnsupportedPngError, match="duplicate effective colors"):
+        png_to_jxl(source, effort=1)
+
+
+def test_palette_index_outside_plte_is_corrupt() -> None:
+    source = make_palette_png(
+        palette=b"\x00\x00\x00",
+        width=1,
+        height=1,
+        indices=b"\x01",
+        filters=b"\x00",
+    )
+    with pytest.raises(CorruptPngError, match="exceeds the PLTE"):
+        png_to_jxl(source, effort=1)
 
 
 @pytest.mark.parametrize("kind", ["compressible", "noisy"])
@@ -179,6 +276,22 @@ def test_tampered_pixels_are_rejected() -> None:
         jxl_to_png(tampered)
 
 
+def test_tampered_palette_carrier_pixels_are_rejected() -> None:
+    source = make_palette_png(
+        palette=b"\xff\x00\x00\x00\xff\x00\x00\x00\xff",
+        width=2,
+        height=2,
+        indices=b"\x00\x01\x02\x01",
+        filters=b"\x00\x04",
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    jumb = jumb_payloads(parse_jxl_container(archive))[0]
+    tampered = _reencode_with_jumb(archive, jumb, change_pixel=True)
+    with pytest.raises(CorruptReconstructionError):
+        jxl_to_png(tampered)
+
+
 def test_tampered_corrections_are_rejected() -> None:
     source = make_png(mode="RGBA", width=3, height=3)
     archive = png_to_jxl(source, effort=1)
@@ -221,6 +334,74 @@ def test_tampered_adler_is_rejected() -> None:
         build_jumbf(serialize_reconstruction(changed)),
     )
     with pytest.raises(Png2JxlError):
+        jxl_to_png(tampered)
+
+
+def test_tampered_palette_bitmap_is_rejected() -> None:
+    source = make_palette_png(
+        palette=b"\xff\x00\x00\x00\xff\x00\x00\x00\xff",
+        width=2,
+        height=2,
+        indices=b"\x00\x01\x00\x01",
+        filters=b"\x00\x04",
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    project_payload = find_project_payload(jumb_payloads(parse_jxl_container(archive)))
+    reconstruction = parse_reconstruction(project_payload)
+    changed = replace(reconstruction, palette_used=b"\x07" + b"\x00" * 31)
+    tampered = _reencode_with_jumb(
+        archive,
+        build_jumbf(serialize_reconstruction(changed)),
+    )
+    with pytest.raises(CorruptReconstructionError, match="declared index set"):
+        jxl_to_png(tampered)
+
+
+@pytest.mark.parametrize(
+    ("chunk_type", "original", "changed"),
+    [
+        (
+            b"PLTE",
+            b"\xff\x00\x00\x00\xff\x00\x00\x00\xff",
+            b"\xff\x00\xff\x00\xff\x00\x00\x00\xff",
+        ),
+        (b"tRNS", b"\xff\x80", b"\xfe\x80"),
+    ],
+)
+def test_tampered_palette_metadata_is_rejected(
+    chunk_type: bytes,
+    original: bytes,
+    changed: bytes,
+) -> None:
+    palette = b"\xff\x00\x00\x00\xff\x00\x00\x00\xff"
+    source = make_palette_png(
+        palette=palette,
+        transparency=b"\xff\x80",
+        width=2,
+        height=2,
+        indices=b"\x00\x01\x02\x01",
+        filters=b"\x00\x04",
+    )
+    archive = png_to_jxl(source, effort=1)
+    assert archive is not None
+    project_payload = find_project_payload(jumb_payloads(parse_jxl_container(archive)))
+    reconstruction = parse_reconstruction(project_payload)
+    original_chunk = chunk(chunk_type, original)
+    changed_prefix = reconstruction.prefix.replace(
+        original_chunk,
+        chunk(chunk_type, changed),
+    )
+    assert changed_prefix != reconstruction.prefix
+    tampered = _reencode_with_jumb(
+        archive,
+        build_jumbf(
+            serialize_reconstruction(
+                replace(reconstruction, prefix=changed_prefix),
+            )
+        ),
+    )
+    with pytest.raises(CorruptReconstructionError):
         jxl_to_png(tampered)
 
 

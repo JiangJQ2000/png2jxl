@@ -17,27 +17,19 @@ UNSUPPORTED_PATHS = {
     "bmp/html/pal1.png",
     "bmp/html/pal1bg.png",
     "bmp/html/pal4.png",
-    "bmp/html/pal8.png",
     "bmp/html/pal8nonsquare-e.png",
-    "bmp/html/pal8w124.png",
-    "bmp/html/pal8w125.png",
-    "bmp/html/pal8w126.png",
     "eps/non_zero_bb.png",
     "eps/non_zero_bb_scale2.png",
     "eps/zero_bb.png",
     "eps/zero_bb_scale2.png",
     "g4-fillorder-test.png",
     "hopper_bw_500.png",
-    "hopper_wal.png",
     "i_trns.png",
     "morph_a.png",
-    "p_trns_single.png",
-    "pal8rletrns.png",
     "pil123p.png",
     "pil123rgba.png",
     "sunraster.im1.png",
     "tRNS_null_1x1.png",
-    "tga/common/200x32_p.png",
     "tiny.png",
 }
 
@@ -78,8 +70,8 @@ def test_pillow_corpus_shape() -> None:
 
     assert len(paths) == EXPECTED_PNG_COUNT
     assert len(apng_paths) == EXPECTED_APNG_COUNT
-    assert len(unsupported_paths) == 82
-    assert len(exact_paths) == 331
+    assert len(unsupported_paths) == 74
+    assert len(exact_paths) == 339
     assert UNSUPPORTED_PATHS <= paths
     assert CORRUPT_PATHS <= paths
     assert not (UNSUPPORTED_PATHS & CORRUPT_PATHS)

@@ -9,7 +9,7 @@ from png2jxl import (
 )
 from png2jxl.png import parse_png
 
-from .helpers import chunk, make_png
+from .helpers import chunk, make_palette_png, make_png
 
 
 def test_parse_preserves_png_structure() -> None:
@@ -37,7 +37,7 @@ def test_crc_corruption_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"color_type": 3}, "indexed"),
+        ({"mode": "L", "color_type": 3, "bit_depth": 4}, "8-bit"),
         ({"bit_depth": 16}, "8-bit"),
         ({"interlace": 1}, "Adam7"),
     ],
@@ -68,3 +68,58 @@ def test_dimension_limit_is_enforced() -> None:
 def test_trailing_bytes_are_rejected() -> None:
     with pytest.raises(CorruptPngError, match="trailing"):
         parse_png(make_png() + b"extra")
+
+
+def test_parse_indexed_color_preserves_palette_metadata() -> None:
+    palette = b"\x00\x00\x00\x80\x80\x80\xff\xff\xff"
+    transparency = b"\xff\x80"
+    source = make_palette_png(
+        palette=palette,
+        transparency=transparency,
+        filters=b"\x00\x04",
+        idat_splits=[0, 1, 0, 2],
+    )
+    parsed = parse_png(source)
+    assert parsed.mode == "P"
+    assert parsed.bytes_per_pixel == 1
+    assert parsed.palette == palette
+    assert parsed.transparency == transparency
+    assert parsed.expected_filtered_size == (parsed.width + 1) * parsed.height
+
+
+def test_indexed_color_requires_plte() -> None:
+    source = make_png(mode="L", color_type=3)
+    with pytest.raises(CorruptPngError, match="requires PLTE"):
+        parse_png(source)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [(b"PLTE", b"\x00\x00")],
+        [(b"PLTE", b"\x00\x00\x00"), (b"PLTE", b"\xff\xff\xff")],
+        [(b"tRNS", b"\xff"), (b"PLTE", b"\x00\x00\x00")],
+        [(b"PLTE", b"\x00\x00\x00"), (b"tRNS", b"")],
+        [(b"PLTE", b"\x00\x00\x00"), (b"tRNS", b"\xff\xff")],
+        [
+            (b"PLTE", b"\x00\x00\x00"),
+            (b"tRNS", b"\xff"),
+            (b"tRNS", b"\xff"),
+        ],
+    ],
+)
+def test_invalid_palette_chunks_are_rejected(
+    chunks: list[tuple[bytes, bytes]],
+) -> None:
+    source = make_png(mode="L", color_type=3, before_idat=chunks)
+    with pytest.raises(CorruptPngError):
+        parse_png(source)
+
+
+def test_palette_trns_after_idat_is_rejected() -> None:
+    source = make_palette_png(
+        palette=b"\x00\x00\x00",
+        after_idat=[(b"tRNS", b"\xff")],
+    )
+    with pytest.raises(CorruptPngError, match="tRNS"):
+        parse_png(source)

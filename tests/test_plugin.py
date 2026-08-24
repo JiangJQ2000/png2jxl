@@ -11,7 +11,16 @@ from png2jxl import (
     register,
 )
 
-from .helpers import make_png
+from .helpers import make_palette_png, make_png
+
+
+def palette_source() -> bytes:
+    return make_palette_png(
+        palette=b"\xff\x00\x00\x00\xff\x00\x00\x00\xff",
+        transparency=b"\xff\x80\x00",
+        indices=b"\x00\x01\x02\x01\x00\x02",
+        filters=b"\x00\x04",
+    )
 
 
 def test_explicit_source_png_save() -> None:
@@ -35,6 +44,37 @@ def test_path_backed_source_save(tmp_path: Path) -> None:
     archive_path = tmp_path / "source.png.jxl"
     source_path.write_bytes(source)
     with Image.open(source_path) as image:
+        image.save(
+            archive_path,
+            format="JXL",
+            png_reconstruction=True,
+            effort=1,
+        )
+    assert jxl_to_png(archive_path.read_bytes()) == source
+
+
+def test_explicit_palette_source_png_save() -> None:
+    source = palette_source()
+    with Image.open(BytesIO(source)) as image:
+        assert image.mode == "P"
+        output = BytesIO()
+        image.save(
+            output,
+            format="JXL",
+            png_reconstruction=True,
+            source_png=source,
+            effort=1,
+        )
+    assert jxl_to_png(output.getvalue()) == source
+
+
+def test_path_backed_palette_source_save(tmp_path: Path) -> None:
+    source = palette_source()
+    source_path = tmp_path / "palette.png"
+    archive_path = tmp_path / "palette.png.jxl"
+    source_path.write_bytes(source)
+    with Image.open(source_path) as image:
+        assert image.mode == "P"
         image.save(
             archive_path,
             format="JXL",

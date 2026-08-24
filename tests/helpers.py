@@ -74,6 +74,39 @@ def make_png(
     return b"".join(pieces)
 
 
+def make_palette_png(
+    *,
+    palette: bytes,
+    transparency: bytes | None = None,
+    width: int = 3,
+    height: int = 2,
+    indices: bytes | None = None,
+    filters: bytes | None = None,
+    idat_splits: Iterable[int] | None = None,
+    before_plte: Iterable[tuple[bytes, bytes]] = (),
+    after_palette: Iterable[tuple[bytes, bytes]] = (),
+    after_idat: Iterable[tuple[bytes, bytes]] = (),
+) -> bytes:
+    if indices is None:
+        entry_count = len(palette) // 3
+        indices = bytes(index % entry_count for index in range(width * height))
+    palette_chunks = [*before_plte, (b"PLTE", palette)]
+    if transparency is not None:
+        palette_chunks.append((b"tRNS", transparency))
+    palette_chunks.extend(after_palette)
+    return make_png(
+        mode="L",
+        width=width,
+        height=height,
+        samples=indices,
+        filters=filters,
+        idat_splits=idat_splits,
+        before_idat=palette_chunks,
+        after_idat=after_idat,
+        color_type=3,
+    )
+
+
 def box(
     box_type: bytes,
     payload: bytes,

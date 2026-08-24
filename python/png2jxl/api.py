@@ -21,7 +21,16 @@ from .exceptions import (
 from .jumbf import build_jumbf, find_project_payload
 from .jxl_container import jumb_payloads, parse_jxl_container
 from .limits import DEFAULT_LIMITS, ResourceLimits
-from .png import ParsedPng, parse_png
+from .png import (
+    AmbiguousPaletteError,
+    PaletteError,
+    ParsedPng,
+    carrier_to_palette,
+    palette_carrier_mode,
+    palette_from_prefix,
+    palette_to_carrier,
+    parse_png,
+)
 from .png_filter import FilterError, refilter, unfilter
 from .reconstruction import (
     PREFLATE_VERSION,
@@ -177,7 +186,7 @@ def png_to_jxl(
     parsed = parse_png(png, limits)
     plaintext, corrections = _encode_preflate(parsed, limits)
     try:
-        samples, row_filters = unfilter(
+        source_samples, row_filters = unfilter(
             plaintext,
             parsed.width,
             parsed.height,
@@ -185,6 +194,22 @@ def png_to_jxl(
         )
     except FilterError as error:
         raise CorruptPngError(str(error)) from error
+
+    carrier_mode = parsed.mode
+    carrier_samples = source_samples
+    palette_used = b""
+    if parsed.color_type == 3:
+        assert parsed.palette is not None
+        try:
+            carrier_mode, carrier_samples, palette_used = palette_to_carrier(
+                source_samples,
+                parsed.palette,
+                parsed.transparency,
+            )
+        except AmbiguousPaletteError as error:
+            raise UnsupportedPngError(str(error)) from error
+        except PaletteError as error:
+            raise CorruptPngError(str(error)) from error
 
     reconstruction = ReconstructionData(
         source_length=len(png),
@@ -198,11 +223,12 @@ def png_to_jxl(
         idat_lengths=parsed.idat_lengths,
         row_filters=row_filters,
         corrections=corrections,
+        palette_used=palette_used,
     )
     payload = serialize_reconstruction(reconstruction, limits)
     archive = _encode_jxl(
-        samples,
-        parsed.mode,
+        carrier_samples,
+        carrier_mode,
         parsed.width,
         parsed.height,
         effort,
@@ -273,19 +299,47 @@ def jxl_to_png(
     reconstruction = parse_reconstruction(payload, limits)
     width, height = reconstruction.dimensions
     bytes_per_pixel = reconstruction.bytes_per_pixel
+    palette_metadata: tuple[bytes, bytes | None] | None = None
+    if reconstruction.color_type == 3:
+        try:
+            palette_metadata = palette_from_prefix(
+                reconstruction.prefix,
+                reconstruction.ihdr,
+            )
+            carrier_mode = palette_carrier_mode(
+                *palette_metadata,
+                reconstruction.palette_used,
+            )
+        except PaletteError as error:
+            raise CorruptReconstructionError(str(error)) from error
+    else:
+        carrier_mode = reconstruction.mode
+    carrier_bytes_per_pixel = {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4}[carrier_mode]
 
     info, samples = _decode_jxl(jxl, num_threads)
-    if info.mode != reconstruction.mode or info.width != width or info.height != height:
+    if info.mode != carrier_mode or info.width != width or info.height != height:
         raise CorruptReconstructionError(
             "decoded JXL mode or dimensions do not match reconstruction metadata"
         )
-    expected_samples = width * height * bytes_per_pixel
+    expected_samples = width * height * carrier_bytes_per_pixel
     if len(samples) != expected_samples:
         raise CorruptReconstructionError("decoded JXL sample length is inconsistent")
 
+    source_samples = samples
+    if palette_metadata is not None:
+        try:
+            source_samples = carrier_to_palette(
+                samples,
+                info.mode,
+                *palette_metadata,
+                reconstruction.palette_used,
+            )
+        except PaletteError as error:
+            raise CorruptReconstructionError(str(error)) from error
+
     try:
         filtered = refilter(
-            samples,
+            source_samples,
             width,
             height,
             bytes_per_pixel,

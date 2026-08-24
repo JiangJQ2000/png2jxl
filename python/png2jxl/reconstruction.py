@@ -10,12 +10,21 @@ from .exceptions import (
     ResourceLimitError,
 )
 from .limits import DEFAULT_LIMITS, ResourceLimits
-from .png import COLOR_INFO, IHDR_STRUCT
+from .png import (
+    COLOR_INFO,
+    IHDR_STRUCT,
+    PALETTE_BITMAP_SIZE,
+    PaletteError,
+    palette_carrier_mode,
+    palette_from_prefix,
+)
 
 MAGIC = b"\x89PNGR\r\n\x1a"
 WIRE_MAJOR = 1
 WIRE_MINOR = 0
 FLAGS = 0
+FLAG_PALETTE_USED_BITMAP = 1 << 0
+KNOWN_FLAGS = FLAG_PALETTE_USED_BITMAP
 PREFLATE_CODEC_ID = 1
 PREFLATE_VERSION = (0, 7, 6)
 
@@ -35,6 +44,7 @@ class ReconstructionData:
     idat_lengths: tuple[int, ...]
     row_filters: bytes
     corrections: bytes
+    palette_used: bytes = b""
 
     @property
     def dimensions(self) -> tuple[int, int]:
@@ -47,10 +57,18 @@ class ReconstructionData:
 
     @property
     def mode(self) -> str:
+        if self.color_type == 3:
+            palette, transparency = palette_from_prefix(self.prefix, self.ihdr)
+            return palette_carrier_mode(
+                palette,
+                transparency,
+                self.palette_used,
+            )
         return COLOR_INFO[self.color_type][0]
 
     @property
     def bytes_per_pixel(self) -> int:
+        """Return the source PNG bytes per pixel used by its row filters."""
         return COLOR_INFO[self.color_type][1]
 
 
@@ -118,6 +136,24 @@ def _validate_common(data: ReconstructionData, limits: ResourceLimits) -> None:
         limits.max_correction_size,
         "preflate corrections",
     )
+    if color_type == 3:
+        if len(data.palette_used) != PALETTE_BITMAP_SIZE:
+            raise CorruptReconstructionError(
+                "palette reconstruction requires a 32-byte used-index bitmap"
+            )
+        try:
+            palette, transparency = palette_from_prefix(
+                data.prefix,
+                data.ihdr,
+                max_chunk_count=limits.max_chunk_count,
+            )
+            palette_carrier_mode(palette, transparency, data.palette_used)
+        except PaletteError as error:
+            raise CorruptReconstructionError(str(error)) from error
+    elif data.palette_used:
+        raise CorruptReconstructionError(
+            "non-palette reconstruction contains a used-index bitmap"
+        )
 
     zlib_length = sum(data.idat_lengths)
     if zlib_length < 6:
@@ -142,6 +178,7 @@ def serialize_reconstruction(
             idat_table,
             data.row_filters,
             data.corrections,
+            data.palette_used,
         )
     )
     payload_size = HEADER.size + len(body)
@@ -151,7 +188,7 @@ def serialize_reconstruction(
         MAGIC,
         WIRE_MAJOR,
         WIRE_MINOR,
-        FLAGS,
+        FLAG_PALETTE_USED_BITMAP if data.color_type == 3 else FLAGS,
         payload_size,
         data.source_length,
         data.source_sha256,
@@ -209,7 +246,7 @@ def parse_reconstruction(
         raise IncompatibleReconstructionError(
             f"unsupported reconstruction wire version {major}.{minor}"
         )
-    if flags != FLAGS:
+    if flags & ~KNOWN_FLAGS:
         raise IncompatibleReconstructionError("unsupported reconstruction flags")
     if payload_size != len(payload):
         raise CorruptReconstructionError(
@@ -243,6 +280,13 @@ def parse_reconstruction(
         limits.max_correction_size,
         "preflate corrections",
     )
+    color_type = IHDR_STRUCT.unpack(ihdr)[3]
+    has_palette_bitmap = bool(flags & FLAG_PALETTE_USED_BITMAP)
+    if has_palette_bitmap != (color_type == 3):
+        raise IncompatibleReconstructionError(
+            "palette reconstruction flag and IHDR are inconsistent"
+        )
+    palette_used_length = PALETTE_BITMAP_SIZE if has_palette_bitmap else 0
     idat_table_length = idat_count * 4
     variable_length = (
         prefix_length
@@ -250,6 +294,7 @@ def parse_reconstruction(
         + idat_table_length
         + row_filter_count
         + correction_length
+        + palette_used_length
     )
     if variable_length != len(payload) - HEADER.size:
         raise CorruptReconstructionError(
@@ -270,6 +315,8 @@ def parse_reconstruction(
     row_filters = bytes(view[offset : offset + row_filter_count])
     offset += row_filter_count
     corrections = bytes(view[offset : offset + correction_length])
+    offset += correction_length
+    palette_used = bytes(view[offset : offset + palette_used_length])
 
     data = ReconstructionData(
         source_length=source_length,
@@ -283,6 +330,7 @@ def parse_reconstruction(
         idat_lengths=idat_lengths,
         row_filters=row_filters,
         corrections=corrections,
+        palette_used=palette_used,
     )
     _validate_common(data, limits)
     return data

@@ -2,10 +2,17 @@
 
 ## Supported exact profile
 
-The test matrix covers static, non-interlaced, 8-bit L, LA, RGB, and RGBA PNG;
-filters 0–4 including mixed rows; single/multiple/zero-length IDAT chunks;
-unusual split boundaries; legal RGB/RGBA PLTE; ancillary chunks before and
-after IDAT; and compressible/noisy samples.
+The test matrix covers static, non-interlaced, 8-bit L, LA, RGB, RGBA, and
+indexed-color PNG; filters 0–4 including mixed rows;
+single/multiple/zero-length IDAT chunks; unusual split boundaries; legal
+RGB/RGBA PLTE; ancillary chunks before and after IDAT; and compressible/noisy
+samples.
+
+Indexed-color coverage includes different palette sizes, absent/full/partial
+`tRNS`, L/LA/RGB/RGBA carrier selection, dead duplicate colors, explicit
+rejection of duplicate effective colors through multiple used indices, all
+five filters, multiple IDAT chunks, out-of-range indices, and malformed or
+misordered `PLTE`/`tRNS` chunks.
 
 Unsupported legal profiles and corrupt inputs must raise typed exceptions.
 Every correctness fix requires a regression test.
@@ -18,19 +25,20 @@ Every correctness fix requires a regression test.
   wrapper, expected plaintext, filters, optional Numba JIT and pure-Python
   fallback, and resource limits.
 - Wire/JUMBF/JXL: deterministic serialization, body digest, version/flags,
-  malicious lengths, unrelated/duplicate/malformed JUMBF, 32/64/size-0 boxes,
-  and truncation.
+  palette bitmap bounds and set consistency, malicious lengths,
+  unrelated/duplicate/malformed JUMBF, 32/64/size-0 boxes, and truncation.
 - End to end: generated archive normally decodes through `pillow_jxl` and
   optional `djxl`, then reconstructs byte-for-byte with matching SHA-256.
-- Tampering: decoded pixels, corrections, source hash, IHDR, IDAT lengths,
-  Adler-32, duplicate project boxes, and unsupported wire/preflate versions.
+- Tampering: decoded pixels, palette metadata/bitmap, corrections, source hash,
+  IHDR, IDAT lengths, Adler-32, duplicate project boxes, and unsupported
+  wire/preflate versions.
 - Pillow: normal delegation, path source, explicit source bytes, stream failure,
   changed image mismatch, size rejection, and idempotent registration.
 - Pillow corpus: all 420 PNG files from Pillow 12.3.0 commit
   `bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d`; supported files must roundtrip
   byte-for-byte, while known unsupported or corrupt files must raise their
-  corresponding typed exception. The pinned corpus currently contains 331
-  exact-roundtrip cases, 82 unsupported profiles, and 7 corrupt inputs.
+  corresponding typed exception. The pinned corpus currently contains 339
+  exact-roundtrip cases, 74 unsupported profiles, and 7 corrupt inputs.
 
 ## Compatibility policy
 

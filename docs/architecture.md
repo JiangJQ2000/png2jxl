@@ -29,10 +29,13 @@ Python without changing the API.
    Adler-32. Analyze only the raw-DEFLATE body with verified preflate.
 3. Cross-check preflate plaintext against a bounded standard zlib decode,
    expected length, and Adler-32; unfilter it into raw samples.
-4. Serialize the v1.0 reconstruction payload and wrap it in project JUMBF.
-5. Encode samples through `pillow_jxl` with lossless mode, container mode, an
+4. For indexed color, record a 256-bit used-index bitmap and expand indices to
+   the smallest lossless L/LA/RGB/RGBA carrier. Reject two used indices with the
+   same effective RGBA color because carrier pixels cannot disambiguate them.
+5. Serialize the v1.0 reconstruction payload and wrap it in project JUMBF.
+6. Encode samples through `pillow_jxl` with lossless mode, container mode, an
    uncompressed `jumb`, effort 1–10, and the requested JXL thread count.
-6. Unless `only_if_smaller` rejects the result, reconstruct from the final JXL
+7. Unless `only_if_smaller` rejects the result, reconstruct from the final JXL
    and require direct byte equality before returning.
 
 ## Decode pipeline
@@ -43,9 +46,13 @@ Python without changing the API.
    plaintext, prefix/suffix, correction, and final-size limits before JXL decode.
 3. Decode only through `pillow_jxl`, then match mode, dimensions, and sample
    length to the stored IHDR.
-4. Refilter with exact stored row filters, verify Adler-32, recreate raw-DEFLATE,
+4. For indexed color, derive the carrier mode from exact `PLTE`/`tRNS` bytes and
+   the used-index bitmap, invert carrier samples to indices, and require that
+   the observed index set exactly matches the bitmap.
+5. Refilter source samples with exact stored row filters, verify Adler-32,
+   recreate raw-DEFLATE,
    and verify the rebuilt zlib stream yields the same filtered plaintext.
-5. Split the zlib bytes at the stored IDAT boundaries, regenerate IDAT CRCs,
+6. Split the zlib bytes at the stored IDAT boundaries, regenerate IDAT CRCs,
    append exact prefix/suffix, validate the final PNG, and require stored length
    and SHA-256.
 
@@ -66,10 +73,12 @@ nevertheless requires trusted JXL because `pillow_jxl` 1.3.8 decodes pixels
 before returning codestream dimensions, so hostile codestream allocation cannot
 be capped by stored metadata alone.
 
-Raw samples and all original PNG metadata bytes remain exact. Generic JXL
-viewer color, transparency-key, or metadata semantics may differ when the
-public upstream encoder cannot express an original PNG profile or ancillary
-chunk. Do not introduce another JXL binding to compensate.
+All original PNG metadata bytes remain exact. Indexed source samples are stored
+indirectly as ordinary JXL pixels plus a used-index bitmap; `tRNS` entries not
+present in the chunk have alpha 255, and no background compositing occurs.
+Generic JXL viewer color, transparency-key, or metadata semantics may differ
+when the public upstream encoder cannot express an original PNG profile or
+ancillary chunk. Do not introduce another JXL binding to compensate.
 
 ## Pillow integration
 
