@@ -208,7 +208,7 @@ def _decode_png_samples(parsed: ParsedPng) -> bytes:
 def png_to_jxl(
     png: bytes,
     *,
-    effort: int = 10,
+    effort: int = 7,
     num_threads: int = -1,
     only_if_smaller: bool = False,
     limits: ResourceLimits = DEFAULT_LIMITS,

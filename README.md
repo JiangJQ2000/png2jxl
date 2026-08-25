@@ -1,35 +1,28 @@
 # png2jxl
 
+`png2jxl` converts supported PNG images to pixel-lossless JPEG XL while preserving enough information to reconstruct the original PNG **byte-for-byte**.
+
+## Installation
+
 ```bash
 pip install -U png2jxl
 ```
 
-[!WARNING]
-png2jxl is currently in an early stage of development. APIs, file formats,
-and behavior may change without notice, and backward compatibility is not
-guaranteed at this time.
-
-`png2jxl` converts supported PNG files to pixel-lossless JPEG XL while retaining
-enough information to reconstruct the original PNG **byte-for-byte**.
-
-The output remains a regular JPEG XL image: [`pillow-jxl-plugin`](https://github.com/Isotr0py/pillow-jpegxl-plugin) handles JXL
-coding, while [`preflate-rs`](https://github.com/microsoft/preflate-rs) enables exact reconstruction of the original
-DEFLATE stream.
+## Python API
 
 ```python
 from png2jxl import jxl_to_png, png_to_jxl
 
 source = open("image.png", "rb").read()
 archive = png_to_jxl(source)
+
 assert archive is not None
 assert jxl_to_png(archive) == source
 ```
 
-Successful calls always verify exact source length and SHA-256. Encoding also
-reconstructs the completed JXL and compares it directly with the source. There
-is no unverified or best-effort public mode.
+Encoding and decoding are verified automatically against the original source.
 
-Use `only_if_smaller=True` when a larger result should be rejected with `None`:
+To reject results that are larger than the source PNG:
 
 ```python
 archive = png_to_jxl(source, effort=10, only_if_smaller=True)
@@ -38,23 +31,19 @@ archive = png_to_jxl(source, effort=10, only_if_smaller=True)
 ## Command line
 
 ```bash
-python -m png2jxl encode image.png   # writes image.jxl (effort 7 by default)
-python -m png2jxl decode image.jxl   # writes image.png, byte-exact and verified
-python -m png2jxl check image.jxl    # reports whether the pngr envelope is present
+python -m png2jxl encode image.png   # writes image.jxl
+python -m png2jxl decode image.jxl   # writes image.png
+python -m png2jxl check image.jxl    # checks for the pngr envelope
 ```
 
-Every subcommand accepts `-o/--output`; without it the extension is swapped
-(`.png` becomes `.jxl` and vice versa). Existing output files are never
-overwritten. `encode` also accepts `--effort 1-10`, `--threads`, and
-`--only-if-smaller`.
-
-Exit codes are `0` on success, `1` on failure, `2` for usage errors, and `3`
-when `--only-if-smaller` rejects an archive that is not smaller.
+* Use `-o/--output` to choose an output path; otherwise the extension is swapped automatically.
+* Existing output files are never overwritten.
+* `encode` supports `--effort 1-10`, `--threads`, and `--only-if-smaller`.
+* Exit codes: `0` success, `1` failure, `2` usage error, `3` rejected by `--only-if-smaller`.
 
 ## Pillow integration
 
-Importing `png2jxl` idempotently augments the registered upstream JXL save
-handler:
+Importing `png2jxl` extends the registered JXL save handler:
 
 ```python
 import png2jxl
@@ -69,49 +58,40 @@ with Image.open("image.png") as image:
     )
 ```
 
-Path-backed PNG images are reread from `image.filename`. Images opened from a
-stream, copied, cropped, converted, generated, or otherwise detached from exact
-source bytes require `source_png=source`. The source file must describe the
-current mode, dimensions, and samples. Ordinary JXL/JPEG behavior continues to
-delegate to `pillow_jxl`.
+For path-backed PNG images, the original bytes are read from `image.filename`. For images opened from streams or modified in memory, pass the original bytes explicitly with `source_png=source`.
 
-## Support and limits
+Ordinary JXL/JPEG behavior continues to delegate to `pillow_jxl`.
 
-Supported PNG images are static, 8-bit L,
-LA, RGB, RGBA, or indexed-color files using PNG filters 0–4 and consecutive
-IDAT chunks. Indexed files require a valid `PLTE`, may use `tRNS`. If
-two used indices resolve to the same effective RGBA color, the file is rejected
-because pixels alone cannot recover which index was present. Dead duplicate
-palette entries are allowed.
+## Supported PNGs
 
-Indexed samples at 1/2/4 bits, all 16-bit samples, and APNG are rejected
-explicitly.
+Supported:
 
-Public functions accept an immutable `ResourceLimits` value. Defaults allow up
-to 1 GiB input/output and 512 MiB filtered plaintext or preflate corrections;
-see [the architecture notes](docs/architecture.md) before increasing them.
+* Static 8-bit `L`, `LA`, `RGB`, and `RGBA` images
+* 8-bit indexed-color PNGs with a valid `PLTE` and optional `tRNS`
+* PNG filters 0–4
+* Consecutive `IDAT` chunks
 
-Generic-viewer color, transparency-key, or ancillary-metadata semantics can be
-limited by the public `pillow_jxl` encoder even though the original PNG bytes
-remain reconstructable. `jxl_to_png` currently assumes trusted JXL input because
-the upstream decoder does not expose a dimension-only preflight before pixel
-allocation.
+Not supported:
 
-## License
+* 1/2/4-bit indexed samples
+* 16-bit samples
+* APNG
+* Indexed images where two used palette entries resolve to the same effective RGBA color
 
-png2jxl is distributed under the terms of the [GNU General Public License
-v3.0](LICENSE) or any later version (GPL-3.0-or-later).
+Unused duplicate palette entries are allowed.
+
+## Limits and notes
+
+Public functions accept an immutable `ResourceLimits` value. Defaults allow up to 1 GiB input/output and 512 MiB of filtered plaintext or preflate corrections.
+
+Some generic-viewer color, transparency, or ancillary-metadata behavior may be limited by the upstream `pillow_jxl` encoder even though the original PNG bytes remain reconstructable. `jxl_to_png` currently assumes trusted JXL input because the upstream decoder does not expose a dimension-only preflight before pixel allocation.
+
+## Dependencies
+
+* [`pillow-jxl-plugin`](https://github.com/Isotr0py/pillow-jpegxl-plugin) — JPEG XL encoding and decoding
+* [`preflate-rs`](https://github.com/microsoft/preflate-rs) — exact reconstruction of the original DEFLATE stream
 
 ## Development
 
-```bash
-maturin develop
-pytest -q
-ruff check .
-ruff format --check .
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-```
-
-The persistent format is documented in [docs/wire-format.md](docs/wire-format.md).
+* [Format specification](docs/wire-format.md)
+* [Architecture notes](docs/architecture.md)
