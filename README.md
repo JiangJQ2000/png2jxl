@@ -35,6 +35,22 @@ Use `only_if_smaller=True` when a larger result should be rejected with `None`:
 archive = png_to_jxl(source, effort=10, only_if_smaller=True)
 ```
 
+## Command line
+
+```bash
+python -m png2jxl encode image.png   # writes image.jxl (effort 7 by default)
+python -m png2jxl decode image.jxl   # writes image.png, byte-exact and verified
+python -m png2jxl check image.jxl    # reports whether the pngr envelope is present
+```
+
+Every subcommand accepts `-o/--output`; without it the extension is swapped
+(`.png` becomes `.jxl` and vice versa). Existing output files are never
+overwritten. `encode` also accepts `--effort 1-10`, `--threads`, and
+`--only-if-smaller`.
+
+Exit codes are `0` on success, `1` on failure, `2` for usage errors, and `3`
+when `--only-if-smaller` rejects an archive that is not smaller.
+
 ## Pillow integration
 
 Importing `png2jxl` idempotently augments the registered upstream JXL save

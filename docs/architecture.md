@@ -11,6 +11,7 @@
 - `jxl_container.py` strictly reads top-level JXL box boundaries.
 - `api.py` orchestrates exact encode and reconstruction.
 - `plugin.py` wraps the upstream Pillow JXL save handler.
+- `cli.py` implements the `python -m png2jxl` encode/decode/check entry points.
 - `path.py`, `limits.py`, and `exceptions.py` expose small supporting APIs.
 
 The only project native code is `src/lib.rs`. It releases the GIL around the
