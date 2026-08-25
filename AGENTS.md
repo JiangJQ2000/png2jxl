@@ -84,5 +84,4 @@ cargo test
 ```
 
 Use byte-exact/file-level reversible and pixel-lossless precisely; never
-conflate them. This repository has not selected a project license and must not
-be published until that decision and dependency compatibility are reviewed.
+conflate them.

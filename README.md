@@ -97,6 +97,11 @@ remain reconstructable. `jxl_to_png` currently assumes trusted JXL input because
 the upstream decoder does not expose a dimension-only preflight before pixel
 allocation.
 
+## License
+
+png2jxl is distributed under the terms of the [GNU General Public License
+v3.0](LICENSE) or any later version (GPL-3.0-or-later).
+
 ## Development
 
 ```bash
