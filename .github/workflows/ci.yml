@@ -11,12 +11,22 @@ permissions:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}${{ matrix.abi3 && ' (abi3)' || '' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: ubuntu-latest
+            python: "3.14"
+            abi3: true
+          - os: macos-latest
+            python: "3.14"
+            abi3: true
+          - os: windows-latest
+            python: "3.14"
+            abi3: true
 
     runs-on: ${{ matrix.os }}
 
@@ -40,7 +50,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14' && !matrix.abi3
         with:
           toolchain: "1.89"
           components: rustfmt, clippy
@@ -56,6 +66,7 @@ jobs:
           manylinux: auto
           args: >-
             --release
+            ${{ matrix.abi3 && '--features pyo3/abi3-py314' || '' }}
             --interpreter
             ${{ runner.os == 'Windows' && 'python' || format('python{0}', matrix.python) }}
 
@@ -67,7 +78,7 @@ jobs:
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
 
       - name: Install djxl
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14' && !matrix.abi3
         run: sudo apt-get update && sudo apt-get install -y libjxl-tools
 
       - run: pytest -q
@@ -77,13 +88,13 @@ jobs:
           python tools/benchmark.py .pillow/Tests/images/hopper.png --effort 10
 
       - name: Python quality
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14' && !matrix.abi3
         run: |
           ruff check .
           ruff format --check .
 
       - name: Rust quality
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14' && !matrix.abi3
         run: |
           cargo fmt --check
           cargo clippy --all-targets --all-features -- -D warnings

@@ -64,7 +64,7 @@ features. Do not expand claims before exact-roundtrip tests.
 
 ## Dependencies
 
-- `pillow-jxl-plugin==1.3.8`
+- `pillow-jxl-plugin>=1.3.8`
 - `preflate-rs==0.7.6`
 - Python `>=3.11` with no upper metadata cap; only tested versions are claimed.
 
