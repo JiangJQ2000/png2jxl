@@ -382,13 +382,16 @@ def test_tampered_source_hash_is_rejected() -> None:
         jxl_to_png(tampered)
 
 
-def test_tampered_adler_is_rejected() -> None:
+def test_tampered_corrections_is_rejected() -> None:
     source = make_png(mode="RGB", width=2, height=2)
     archive = png_to_jxl(source, effort=1)
     assert archive is not None
     project_payload = find_project_payload(jumb_payloads(parse_jxl_container(archive)))
     reconstruction = parse_reconstruction(project_payload)
-    changed = replace(reconstruction, adler32=b"\x00" * 4)
+    changed = replace(
+        reconstruction,
+        corrections=b"\x00" * max(1, len(reconstruction.corrections)),
+    )
     tampered = _reencode_with_jumb(
         archive,
         build_jumbf(serialize_reconstruction(changed)),

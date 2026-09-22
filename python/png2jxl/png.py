@@ -1,6 +1,6 @@
 """Strict parsing for the supported byte-exact PNG profile."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from struct import Struct
 from zlib import crc32
 
@@ -121,23 +121,26 @@ def _palette_colors(
     )
 
 
-def palette_from_prefix(
+def parse_prefix(
     prefix: bytes,
-    expected_ihdr: bytes,
-    *,
-    max_chunk_count: int | None = None,
-) -> tuple[bytes, bytes | None]:
-    """Read and validate palette metadata from an exact pre-IDAT PNG prefix."""
+    limits: ResourceLimits = DEFAULT_LIMITS,
+) -> tuple[bytes, bytes | None, bytes | None]:
+    """Validate an exact pre-IDAT PNG prefix, returning IHDR, palette, transparency.
+
+    The prefix must begin with the PNG signature and contain only the IHDR chunk
+    (and, for indexed color, exactly one PLTE plus optional tRNS) before the first
+    IDAT. Returns ``(ihdr, palette, transparency)`` where ``palette`` and
+    ``transparency`` are ``None`` for non-indexed color types.
+    """
     if not prefix.startswith(PNG_SIGNATURE):
         raise PaletteError("stored PNG prefix has an invalid signature")
-    if len(expected_ihdr) != IHDR_STRUCT.size:
-        raise PaletteError("stored IHDR must contain exactly 13 bytes")
 
     offset = len(PNG_SIGNATURE)
     chunk_count = 0
     seen_ihdr = False
     palette: bytes | None = None
     transparency: bytes | None = None
+    ihdr = b""
     view = memoryview(prefix)
     while offset < len(prefix):
         if len(prefix) - offset < 12:
@@ -160,7 +163,7 @@ def palette_from_prefix(
             raise PaletteError("stored PNG prefix chunk has an invalid CRC")
 
         chunk_count += 1
-        if max_chunk_count is not None and chunk_count > max_chunk_count:
+        if chunk_count > limits.max_chunk_count:
             raise ResourceLimitError(
                 "stored PNG prefix chunk count exceeds its configured limit"
             )
@@ -172,8 +175,9 @@ def palette_from_prefix(
             raise PaletteError("stored PNG prefix has an unknown critical chunk")
 
         if chunk_type == b"IHDR":
-            if seen_ihdr or bytes(payload) != expected_ihdr:
+            if seen_ihdr or len(payload) != IHDR_STRUCT.size:
                 raise PaletteError("stored PNG prefix IHDR is inconsistent")
+            ihdr = bytes(payload)
             seen_ihdr = True
         elif not seen_ihdr:
             raise PaletteError("stored PNG prefix data appears before IHDR")
@@ -191,7 +195,36 @@ def palette_from_prefix(
             raise PaletteError("stored PNG prefix extends beyond pre-IDAT chunks")
         offset = chunk_end
 
-    if not seen_ihdr or palette is None:
+    if not seen_ihdr:
+        raise PaletteError("stored PNG prefix is incomplete")
+    _width, _height, _bit_depth, color_type, _comp, _filt, _inter = IHDR_STRUCT.unpack(
+        ihdr
+    )
+    if color_type == 3 and palette is None:
+        raise PaletteError("stored palette PNG prefix is missing PLTE")
+    if color_type != 3 and palette is not None:
+        raise PaletteError("stored PNG prefix has PLTE for a non-palette color type")
+    return ihdr, palette, transparency
+
+
+def palette_from_prefix(
+    prefix: bytes,
+    expected_ihdr: bytes,
+    *,
+    max_chunk_count: int | None = None,
+) -> tuple[bytes, bytes | None]:
+    """Read and validate palette metadata from an exact pre-IDAT PNG prefix."""
+    if len(expected_ihdr) != IHDR_STRUCT.size:
+        raise PaletteError("stored IHDR must contain exactly 13 bytes")
+    limits = (
+        replace(DEFAULT_LIMITS, max_chunk_count=max_chunk_count)
+        if max_chunk_count is not None
+        else DEFAULT_LIMITS
+    )
+    ihdr, palette, transparency = parse_prefix(prefix, limits)
+    if ihdr != expected_ihdr:
+        raise PaletteError("stored PNG prefix IHDR is inconsistent")
+    if palette is None:
         raise PaletteError("stored palette PNG prefix is incomplete")
     return palette, transparency
 

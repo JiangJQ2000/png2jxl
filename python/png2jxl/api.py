@@ -255,16 +255,13 @@ def png_to_jxl(
             raise CorruptPngError(str(error)) from error
 
     reconstruction = ReconstructionData(
-        source_length=len(png),
         source_sha256=source_digest(png),
-        ihdr=parsed.ihdr,
-        filtered_length=len(plaintext),
         zlib_header=parsed.zlib_header,
-        adler32=parsed.adler32,
         prefix=parsed.prefix,
         suffix=parsed.suffix,
         idat_lengths=parsed.idat_lengths,
         row_filters=row_filters,
+        ihdr=parsed.ihdr,
         corrections=corrections,
         palette_used=palette_used,
     )
@@ -392,14 +389,13 @@ def jxl_to_png(
         raise CorruptReconstructionError(str(error)) from error
     if len(filtered) != reconstruction.filtered_length:
         raise CorruptReconstructionError("recreated filtered length is inconsistent")
-    if (adler32(filtered) & 0xFFFFFFFF).to_bytes(4, "big") != reconstruction.adler32:
-        raise CorruptReconstructionError("recreated filtered data fails Adler-32")
+    reconstructed_adler = (adler32(filtered) & 0xFFFFFFFF).to_bytes(4, "big")
 
     raw_deflate = _decode_preflate(filtered, reconstruction.corrections)
     expected_raw_length = sum(reconstruction.idat_lengths) - 6
     if len(raw_deflate) != expected_raw_length:
         raise CorruptReconstructionError("recreated DEFLATE length is inconsistent")
-    zlib_stream = reconstruction.zlib_header + raw_deflate + reconstruction.adler32
+    zlib_stream = reconstruction.zlib_header + raw_deflate + reconstructed_adler
     try:
         standard_plaintext = _zlib_plaintext(
             zlib_stream,
@@ -418,8 +414,6 @@ def jxl_to_png(
         )
     )
     limits.ensure(len(rebuilt), limits.max_reconstructed_size, "reconstructed PNG")
-    if len(rebuilt) != reconstruction.source_length:
-        raise ExactRoundtripError("reconstructed PNG length does not match the source")
     if sha256(rebuilt).digest() != reconstruction.source_sha256:
         raise ExactRoundtripError("reconstructed PNG SHA-256 does not match the source")
     try:

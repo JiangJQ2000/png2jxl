@@ -36,7 +36,7 @@ execute as plain Python without changing the API.
 4. For indexed color, record a 256-bit used-index bitmap and expand indices to
    the smallest lossless L/LA/RGB/RGBA carrier. Reject two used indices with the
    same effective RGBA color because carrier pixels cannot disambiguate them.
-5. Serialize the v1.0 reconstruction payload and wrap it in project JUMBF.
+5. Serialize the v2.0 reconstruction payload and wrap it in project JUMBF.
 6. Encode samples through `pillow_jxl` with lossless mode, container mode, an
    uncompressed `jumb`, effort 1–10, and the requested JXL thread count.
 7. Unless `only_if_smaller` rejects the result, reconstruct from the final JXL

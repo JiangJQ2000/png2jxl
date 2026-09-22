@@ -42,13 +42,14 @@ Before changing implementation or persistent data, read the relevant document:
 - Raw PNG bytes are canonical; `Image.tobytes()` is never file-level evidence.
 - Successful public encode/decode always performs complete verification. There
   is no public `verify=False` path and no best-effort return.
-- The `pngr` v1.0 format is persistent. Never change its serialization under
+- The `pngr` v2.0 format is persistent. Never change its serialization under
   the same version or casually update pinned `preflate-rs`.
 - Treat PNG, JUMBF, reconstruction data, and JXL box boundaries as untrusted and
   check lengths before slicing, allocation, or expensive work.
 - MVP `jxl_to_png` accepts trusted JXL only: current `pillow_jxl` cannot expose
-  codestream dimensions before decoding. Validate archive size and stored IHDR
-  before decode, then validate actual decoded mode, size, and sample length.
+  codestream dimensions before decoding. Validate archive size and the IHDR
+  derived from the prefix before decode, then validate actual decoded mode,
+  size, and sample length.
 - Preserve normal `pillow_jxl` behavior unless `png_reconstruction=True`.
 - JPEG byte reconstruction remains upstream `pillow_jxl` functionality.
 

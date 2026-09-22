@@ -1,4 +1,4 @@
-# `pngr` wire format v1.0
+# `pngr` wire format v2.0
 
 The reconstruction record is persistent, deterministic, big-endian, and
 bounded. It never uses pickle or marshal.
@@ -13,7 +13,7 @@ jumd
   toggles: label-present only
   label: png2jxl-png\0
 pngr
-  v1.0 reconstruction payload
+  v2.0 reconstruction payload
 ```
 
 The UUID is UUIDv5 derived from the literal name `png2jxl` in the DNS
@@ -23,45 +23,56 @@ descriptions, or unexpected project child boxes are corrupt.
 
 ## Fixed header
 
-The header uses `>8sHHIQQ32s32sHHHH13sQ2s4sQQQII`:
+The header uses `>HHHHHH32sQQI2s` (66 bytes):
 
 | Field | Meaning |
 | --- | --- |
-| magic | `89 50 4e 47 52 0d 0a 1a` |
-| major/minor | `1`, `0` |
-| flags | bit 0 is the palette used-index bitmap flag; unknown bits are incompatible |
-| payload size | complete header and body length |
-| source length | exact original PNG byte length |
-| source SHA-256 | exact original PNG digest |
-| body SHA-256 | digest of every byte after the fixed header |
+| major/minor | `2`, `0` |
 | codec ID/version | preflate ID `1`, version `0.7.6` |
-| IHDR | exact 13-byte IHDR payload |
-| filtered length | expected filtered scanline plaintext length |
-| zlib header/Adler | exact 2-byte header and 4-byte trailer |
-| section lengths | prefix, suffix, opaque correction lengths |
-| counts | IDAT payload count and row-filter count |
+| source SHA-256 | exact original PNG digest |
+| prefix length | exact prefix byte length |
+| suffix length | exact suffix byte length |
+| IDAT count | original IDAT chunk count |
+| zlib header | exact 2-byte zlib wrapper |
+
+The codec is fixed to preflate 0.7.6; the runtime `_verify_native_version`
+check pins the installed binding to the same version, so the wire records it
+for documentation and rejects any other codec.
 
 ## Variable body
 
 Sections appear without alignment or padding in this exact order:
 
-1. exact PNG prefix through the byte before the first IDAT length field;
-2. exact suffix immediately after the last IDAT CRC through IEND/EOF;
+1. the PNG prefix (signature and pre-IDAT chunk CRCs removed; see below);
+2. the PNG suffix (all chunk CRCs removed and the trailing IEND chunk omitted;
+   see below);
 3. `idat_count` unsigned 32-bit original payload lengths;
-4. one original filter byte per serialized scanline, in row order for
-   non-interlaced PNG or pass-major row order for Adam7;
-5. opaque preflate correction bytes.
-6. when flag bit 0 is set, a fixed 32-byte used-index bitmap.
+4. the original row filters, base-5 packed into the minimum number of bytes;
+5. opaque preflate correction bytes;
+6. when the IHDR color type is 3, a fixed 32-byte used-index bitmap. Its
+   presence is derived from the color type; its 32 bytes are stored here.
 
-The palette flag is required exactly when the stored IHDR has color type 3.
-Bitmap bit `index % 8` of byte `index // 8` corresponds to that palette index,
-with the least-significant bit first. The body SHA-256 covers the bitmap, while
-the header's correction length continues to describe only section 5.
+### Stripped framing
 
-For non-interlaced PNG, the row-filter count equals the image height. For
-Adam7, it is the sum of the non-empty pass heights. The filtered length is the
-sum of one filter byte plus the pass row byte width for every serialized
-scanline. Predictors reset at the start of each pass.
+The stored prefix drops the fixed 8-byte PNG signature and the 4-byte CRC of
+every pre-IDAT chunk (IHDR, and PLTE/tRNS for indexed color). Each chunk is
+stored as just its 4-byte length, 4-byte type, and payload. The prefix always
+begins with the IHDR chunk: the reader requires its length field to be `13` and
+its type to be `IHDR`, then takes the 13-byte payload.
+
+The stored suffix drops the 4-byte CRC of every post-IDAT
+chunk and omits the trailing IEND chunk entirely. The remaining chunks are
+stored as length, type, and payload only. On reconstruction the reader appends
+`crc32(type + payload)` to each and finishes with a freshly computed IEND chunk.
+
+### Row-filter packing
+
+Each scanline filter is a value in `[0, 5)`. The `n` filter values are packed as
+a single base-5 integer `sum(filter[i] * 5**i)` and stored big-endian in
+`ceil(log2(5**n) / 8)` bytes. The reader knows `n` from the IHDR, splits off
+exactly that many bytes, and unpacks the digits.
+
+## Reconstruction notes
 
 For palette archives, exact `PLTE` and optional `tRNS` chunks remain in the PNG
 prefix. Missing `tRNS` entries have alpha 255. The used entries determine the
@@ -70,12 +81,16 @@ LA, colored opaque uses RGB, and colored with transparency uses RGBA. Multiple
 used indices may not resolve to the same effective RGBA color; unused duplicate
 entries are allowed.
 
-The reader checks the body digest and every count/length before slicing. IDAT
-lengths must sum to the recreated zlib stream length, and prefix + IDAT chunks +
-suffix must equal the stored source length. Only wire 1.0 and preflate 0.7.6 are
-accepted. Any future incompatible serialization requires a new major version;
-new optional compatible behavior requires a new minor version and explicit old
-archive tests.
+The reader validates the codec version, every length, and the section layout
+before slicing, and confirms the sections exactly consume the payload. The
+final `source SHA-256` covers the fully rebuilt PNG; it is the authoritative
+byte-exact check. There is intentionally no body-level digest: the source
+digest already catches any corruption, at the cost of detecting metadata-only
+tampering only after full reconstruction.
+
+Only wire 2.0 and preflate 0.7.6 are accepted. Any future incompatible
+serialization requires a new major version; new optional compatible behavior
+requires a new minor version and explicit old archive tests.
 
 The hashes detect accidental or unauthenticated byte modification. They are not
 digital signatures and do not establish who created an archive.

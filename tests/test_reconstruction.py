@@ -1,4 +1,5 @@
 from dataclasses import replace
+from zlib import crc32 as _crc32
 
 import pytest
 from png2jxl import (
@@ -9,9 +10,13 @@ from png2jxl import (
 )
 from png2jxl.png import parse_png
 from png2jxl.reconstruction import (
-    FLAG_PALETTE_USED_BITMAP,
-    HEADER,
     ReconstructionData,
+    _pack_filters,
+    _restore_prefix,
+    _restore_suffix,
+    _strip_prefix,
+    _strip_suffix,
+    _unpack_filters,
     parse_reconstruction,
     serialize_reconstruction,
     source_digest,
@@ -24,16 +29,13 @@ def reconstruction_data() -> ReconstructionData:
     source = make_png(mode="LA", width=2, height=2, filters=b"\x00\x04")
     parsed = parse_png(source)
     return ReconstructionData(
-        source_length=len(source),
         source_sha256=source_digest(source),
-        ihdr=parsed.ihdr,
-        filtered_length=parsed.expected_filtered_size,
         zlib_header=parsed.zlib_header,
-        adler32=parsed.adler32,
         prefix=parsed.prefix,
         suffix=parsed.suffix,
         idat_lengths=parsed.idat_lengths,
         row_filters=b"\x00\x04",
+        ihdr=parsed.ihdr,
         corrections=b"opaque corrections",
     )
 
@@ -48,16 +50,13 @@ def palette_reconstruction_data() -> ReconstructionData:
     )
     parsed = parse_png(source)
     return ReconstructionData(
-        source_length=len(source),
         source_sha256=source_digest(source),
-        ihdr=parsed.ihdr,
-        filtered_length=parsed.expected_filtered_size,
         zlib_header=parsed.zlib_header,
-        adler32=parsed.adler32,
         prefix=parsed.prefix,
         suffix=parsed.suffix,
         idat_lengths=parsed.idat_lengths,
         row_filters=b"\x00\x04",
+        ihdr=parsed.ihdr,
         corrections=b"opaque corrections",
         palette_used=b"\x07" + b"\x00" * 31,
     )
@@ -75,16 +74,13 @@ def adam7_reconstruction_data() -> ReconstructionData:
     )
     parsed = parse_png(source)
     return ReconstructionData(
-        source_length=len(source),
         source_sha256=source_digest(source),
-        ihdr=parsed.ihdr,
-        filtered_length=parsed.expected_filtered_size,
         zlib_header=parsed.zlib_header,
-        adler32=parsed.adler32,
         prefix=parsed.prefix,
         suffix=parsed.suffix,
         idat_lengths=parsed.idat_lengths,
         row_filters=filters,
+        ihdr=parsed.ihdr,
         corrections=b"opaque corrections",
     )
 
@@ -108,7 +104,7 @@ def test_adam7_wire_uses_pass_filter_count() -> None:
     "data",
     [
         replace(adam7_reconstruction_data(), row_filters=b"\x00"),
-        replace(adam7_reconstruction_data(), filtered_length=1),
+        replace(adam7_reconstruction_data(), row_filters=b"\x00" * 15),
     ],
 )
 def test_adam7_layout_metadata_must_be_consistent(data: ReconstructionData) -> None:
@@ -116,37 +112,24 @@ def test_adam7_layout_metadata_must_be_consistent(data: ReconstructionData) -> N
         serialize_reconstruction(data)
 
 
-def test_palette_wire_uses_flagged_v1_body() -> None:
+def test_palette_used_bitmap_is_carried_in_body() -> None:
     expected = palette_reconstruction_data()
     payload = serialize_reconstruction(expected)
-    fields = HEADER.unpack_from(payload)
-    assert fields[1:4] == (1, 0, FLAG_PALETTE_USED_BITMAP)
     assert payload.endswith(expected.palette_used)
     assert parse_reconstruction(payload) == expected
 
 
 def test_unknown_wire_major_is_rejected() -> None:
     payload = bytearray(serialize_reconstruction(reconstruction_data()))
-    payload[8:10] = b"\x00\x02"
+    payload[0:2] = b"\x00\x03"
     with pytest.raises(IncompatibleReconstructionError):
         parse_reconstruction(bytes(payload))
 
 
 def test_unknown_wire_minor_is_rejected() -> None:
     payload = bytearray(serialize_reconstruction(reconstruction_data()))
-    fields = list(HEADER.unpack_from(payload))
-    fields[2] = 1
-    payload[: HEADER.size] = HEADER.pack(*fields)
+    payload[2:4] = b"\x00\x01"
     with pytest.raises(IncompatibleReconstructionError):
-        parse_reconstruction(bytes(payload))
-
-
-def test_unknown_wire_flag_is_rejected() -> None:
-    payload = bytearray(serialize_reconstruction(reconstruction_data()))
-    fields = list(HEADER.unpack_from(payload))
-    fields[3] = 1 << 31
-    payload[: HEADER.size] = HEADER.pack(*fields)
-    with pytest.raises(IncompatibleReconstructionError, match="flags"):
         parse_reconstruction(bytes(payload))
 
 
@@ -165,27 +148,25 @@ def test_invalid_palette_bitmap_is_rejected(data: ReconstructionData) -> None:
         serialize_reconstruction(data)
 
 
-def test_palette_flag_and_ihdr_must_agree() -> None:
-    payload = bytearray(serialize_reconstruction(palette_reconstruction_data()))
-    fields = list(HEADER.unpack_from(payload))
-    fields[3] = 0
-    payload[: HEADER.size] = HEADER.pack(*fields)
-    with pytest.raises(IncompatibleReconstructionError, match="flag"):
-        parse_reconstruction(bytes(payload))
+def test_palette_bitmap_presence_must_match_color_type() -> None:
+    palette = palette_reconstruction_data()
+    with pytest.raises(CorruptReconstructionError, match="bitmap"):
+        serialize_reconstruction(replace(palette, palette_used=b""))
+    non_palette = reconstruction_data()
+    with pytest.raises(CorruptReconstructionError, match="bitmap"):
+        serialize_reconstruction(replace(non_palette, palette_used=b"\x00" * 32))
 
 
 def test_unknown_preflate_version_is_rejected() -> None:
     payload = bytearray(serialize_reconstruction(reconstruction_data()))
-    fields = list(HEADER.unpack_from(payload))
-    fields[11] = 7
-    payload[: HEADER.size] = HEADER.pack(*fields)
+    payload[10:12] = b"\x00\x07"
     with pytest.raises(IncompatibleReconstructionError):
         parse_reconstruction(bytes(payload))
 
 
-def test_payload_length_corruption_is_rejected() -> None:
+def test_corrupt_zlib_header_is_rejected() -> None:
     payload = bytearray(serialize_reconstruction(reconstruction_data()))
-    payload[23] ^= 1
+    payload[64] ^= 1
     with pytest.raises(CorruptReconstructionError):
         parse_reconstruction(bytes(payload))
 
@@ -201,3 +182,59 @@ def test_palette_prefix_chunk_limit_is_enforced() -> None:
     limits = replace(DEFAULT_LIMITS, max_chunk_count=1)
     with pytest.raises(ResourceLimitError, match="chunk count"):
         serialize_reconstruction(palette_reconstruction_data(), limits)
+
+
+def test_base5_filter_packing_roundtrips() -> None:
+    filters = bytes(range(5))
+    packed = _pack_filters(filters)
+    assert packed == (2930).to_bytes(2, "big")
+    assert _unpack_filters(packed, 5) == filters
+    for width in (1, 7, 1000):
+        sample = bytes((i * 3) % 5 for i in range(width))
+        assert _unpack_filters(_pack_filters(sample), width) == sample
+
+
+def test_prefix_suffix_framing_is_stripped_and_restored() -> None:
+    source = make_png(mode="RGB", width=3, height=3)
+    parsed = parse_png(source)
+    stripped = _strip_prefix(parsed.prefix)
+    assert not stripped.startswith(b"\x89PNG")
+    assert _restore_prefix(stripped)[0] == parsed.prefix
+    stripped_suffix = _strip_suffix(parsed.suffix)
+    assert b"IEND" not in stripped_suffix
+    assert _restore_suffix(stripped_suffix) == parsed.suffix
+
+
+def test_wire_stores_stripped_prefix_without_signature_or_crcs() -> None:
+    data = reconstruction_data()
+    payload = serialize_reconstruction(data)
+    parsed = parse_reconstruction(payload)
+    assert parsed.prefix == data.prefix
+    assert parsed.suffix == data.suffix
+    assert parsed.row_filters == data.row_filters
+
+
+def test_suffix_strips_all_chunk_crcs_not_just_iend() -> None:
+    chunk = b"\x00\x00\x00\x04tEXtdata" + _crc32(b"tEXtdata").to_bytes(4, "big")
+    iend = b"\x00\x00\x00\x00IEND" + _crc32(b"IEND").to_bytes(4, "big")
+    suffix = chunk + iend
+    stripped = _strip_suffix(suffix)
+    assert b"IEND" not in stripped
+    assert _crc32(b"tEXtdata").to_bytes(4, "big") not in stripped
+    assert _restore_suffix(stripped) == suffix
+
+
+def test_stripped_prefix_requires_ihdr_first_chunk() -> None:
+    data = reconstruction_data()
+    payload = bytearray(serialize_reconstruction(data))
+    from png2jxl.reconstruction import HEADER
+
+    prefix_len = HEADER.unpack_from(payload)[7]
+    prefix_start = HEADER.size
+    bad = bytes(payload)
+    bad = bytearray(bad)
+    bad[prefix_start : prefix_start + 4] = (99).to_bytes(4, "big")
+    bad[prefix_start + 4 : prefix_start + 8] = b"XUID"
+    with pytest.raises(CorruptReconstructionError):
+        parse_reconstruction(bytes(bad))
+    _ = prefix_len
