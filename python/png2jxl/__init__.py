@@ -23,7 +23,7 @@ from .plugin import register
 try:
     __version__ = version("png2jxl")
 except PackageNotFoundError:
-    __version__ = "0.1.0"
+    __version__ = "0.2.0"
 
 register()
 
